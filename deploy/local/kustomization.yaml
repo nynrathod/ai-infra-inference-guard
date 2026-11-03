@@ -1,0 +1,6 @@
+resources:
+  - ../base/namespace.yaml
+  - ../base/vllm-deployment.yaml
+  - ../base/vllm-service.yaml
+patches:
+  - path: patch.yaml

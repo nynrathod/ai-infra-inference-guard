@@ -1,0 +1,21 @@
+# Prometheus Operator scrapes vLLM's /metrics every 15s. These are the exact
+# signals the Phase 5 AIMD controller will drive on:
+#   vllm:num_requests_running / vllm:num_requests_waiting  (queue depth)
+#   vllm:gpu_cache_usage_perc                               (KV cache pressure)
+#   vllm:time_to_first_token_seconds                        (TTFT histogram)
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: vllm
+  namespace: inference-guard
+  labels:
+    app: vllm
+    app.kubernetes.io/part-of: inference-guard
+spec:
+  selector:
+    matchLabels:
+      app: vllm
+  podMetricsEndpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

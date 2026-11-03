@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  namespace: inference-guard
+spec:
+  template:
+    spec:
+      nodeSelector: null
+      tolerations: null
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai-cpu:v0.33.0
+          args:
+            - --model=Qwen/Qwen2.5-0.5B-Instruct
+            - --served-model-name=Qwen/Qwen3-8B
+            - --max-model-len=8192
+            - --disable-log-requests
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 120
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 600
+            periodSeconds: 30
+            failureThreshold: 10
+          resources:
+            requests:
+              cpu: "2"
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 6Gi

@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  namespace: inference-guard
+  labels:
+    app: vllm
+    app.kubernetes.io/part-of: inference-guard
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  progressDeadlineSeconds: 1800
+  selector:
+    matchLabels:
+      app: vllm
+  template:
+    metadata:
+      labels:
+        app: vllm
+        app.kubernetes.io/part-of: inference-guard
+    spec:
+      enableServiceLinks: false   # service 'vllm' injects VLLM_PORT=tcp://... -> vLLM crash
+      nodeSelector:
+        cloud.google.com/gke-accelerator: nvidia-l4
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: present
+          effect: NoSchedule
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.33.0
+          args:
+            - --model=Qwen/Qwen2.5-0.5B-Instruct
+            - --served-model-name=Qwen/Qwen3-8B
+            - --max-model-len=8192
+            - --gpu-memory-utilization=0.90
+            - --disable-log-requests
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 120
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 900
+            periodSeconds: 30
+            failureThreshold: 10
+          resources:
+            requests:
+              cpu: "2"
+              memory: 6Gi
+            limits:
+              cpu: "4"
+              memory: 16Gi
+              nvidia.com/gpu: "1"
+
+

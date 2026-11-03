@@ -1,0 +1,23 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  terraform:
+    name: terraform fmt + validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - name: Check formatting
+        run: terraform fmt -check -recursive
+      - name: Validate GCP root
+        run: |
+          cd infra/gcp
+          terraform init -backend=false
+          terraform validate
