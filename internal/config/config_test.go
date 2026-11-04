@@ -22,6 +22,12 @@ func unsetEnv(t *testing.T, keys ...string) {
 	}
 }
 
+var meteringEnvKeys = []string{
+	"GATEWAY_REDIS_ADDR", "GATEWAY_REDIS_PASSWORD", "GATEWAY_BUDGET_WINDOW",
+	"GATEWAY_BUDGET_RESERVE_TOKENS", "GATEWAY_TENANT_BUDGETS",
+	"GATEWAY_DEFAULT_TENANT_BUDGET", "GATEWAY_KAFKA_BROKERS", "GATEWAY_USAGE_TOPIC",
+}
+
 func TestLoadValid(t *testing.T) {
 	t.Setenv("GATEWAY_UPSTREAM", "http://localhost:8000")
 	t.Setenv("GATEWAY_API_KEYS", "sk-a=tenant-a, sk-b=tenant-b")
@@ -55,7 +61,10 @@ func TestLoadValid(t *testing.T) {
 }
 
 func TestLoadDefaults(t *testing.T) {
-	unsetEnv(t, "GATEWAY_ADDR", "GATEWAY_TENANT_CONCURRENCY", "GATEWAY_READ_HEADER_TIMEOUT", "GATEWAY_SHUTDOWN_TIMEOUT")
+	unsetEnv(t, append([]string{
+		"GATEWAY_ADDR", "GATEWAY_TENANT_CONCURRENCY",
+		"GATEWAY_READ_HEADER_TIMEOUT", "GATEWAY_SHUTDOWN_TIMEOUT",
+	}, meteringEnvKeys...)...)
 	t.Setenv("GATEWAY_UPSTREAM", "http://localhost:8000")
 	t.Setenv("GATEWAY_API_KEYS", "sk-a=tenant-a")
 
@@ -78,8 +87,105 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadMeteringDefaults(t *testing.T) {
+	unsetEnv(t, meteringEnvKeys...)
+	t.Setenv("GATEWAY_UPSTREAM", "http://localhost:8000")
+	t.Setenv("GATEWAY_API_KEYS", "sk-a=tenant-a")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.RedisAddr != "" {
+		t.Errorf("RedisAddr = %q, want empty", cfg.RedisAddr)
+	}
+	if len(cfg.KafkaBrokers) != 0 {
+		t.Errorf("KafkaBrokers = %v, want empty", cfg.KafkaBrokers)
+	}
+	if cfg.BudgetWindow != 24*time.Hour {
+		t.Errorf("BudgetWindow = %v, want 24h", cfg.BudgetWindow)
+	}
+	if cfg.BudgetReserveTokens != 1024 {
+		t.Errorf("BudgetReserveTokens = %d, want 1024", cfg.BudgetReserveTokens)
+	}
+	if cfg.TenantBudgets != nil {
+		t.Errorf("TenantBudgets = %v, want nil", cfg.TenantBudgets)
+	}
+	if cfg.DefaultTenantBudget != 0 {
+		t.Errorf("DefaultTenantBudget = %d, want 0", cfg.DefaultTenantBudget)
+	}
+	if cfg.UsageTopic != "inference-usage" {
+		t.Errorf("UsageTopic = %q, want inference-usage", cfg.UsageTopic)
+	}
+}
+
+func TestLoadMeteringConfig(t *testing.T) {
+	unsetEnv(t, meteringEnvKeys...)
+	t.Setenv("GATEWAY_UPSTREAM", "http://localhost:8000")
+	t.Setenv("GATEWAY_API_KEYS", "sk-a=tenant-a")
+	t.Setenv("GATEWAY_REDIS_ADDR", "redis:6379")
+	t.Setenv("GATEWAY_KAFKA_BROKERS", "kafka-0:9092, kafka-1:9092")
+	t.Setenv("GATEWAY_TENANT_BUDGETS", "tenant-a:100000, tenant-b:250000")
+	t.Setenv("GATEWAY_BUDGET_WINDOW", "1h")
+	t.Setenv("GATEWAY_BUDGET_RESERVE_TOKENS", "512")
+	t.Setenv("GATEWAY_DEFAULT_TENANT_BUDGET", "50000")
+	t.Setenv("GATEWAY_USAGE_TOPIC", "usage-events")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.RedisAddr != "redis:6379" {
+		t.Errorf("RedisAddr = %q", cfg.RedisAddr)
+	}
+	if len(cfg.KafkaBrokers) != 2 || cfg.KafkaBrokers[0] != "kafka-0:9092" || cfg.KafkaBrokers[1] != "kafka-1:9092" {
+		t.Errorf("KafkaBrokers = %v", cfg.KafkaBrokers)
+	}
+	if cfg.TenantBudgets["tenant-a"] != 100000 || cfg.TenantBudgets["tenant-b"] != 250000 {
+		t.Errorf("TenantBudgets = %v", cfg.TenantBudgets)
+	}
+	if cfg.BudgetWindow != time.Hour {
+		t.Errorf("BudgetWindow = %v, want 1h", cfg.BudgetWindow)
+	}
+	if cfg.BudgetReserveTokens != 512 {
+		t.Errorf("BudgetReserveTokens = %d, want 512", cfg.BudgetReserveTokens)
+	}
+	if cfg.DefaultTenantBudget != 50000 {
+		t.Errorf("DefaultTenantBudget = %d, want 50000", cfg.DefaultTenantBudget)
+	}
+	if cfg.UsageTopic != "usage-events" {
+		t.Errorf("UsageTopic = %q", cfg.UsageTopic)
+	}
+}
+
+func TestLoadInvalidTenantBudgets(t *testing.T) {
+	unsetEnv(t, meteringEnvKeys...)
+	t.Setenv("GATEWAY_UPSTREAM", "http://localhost:8000")
+	t.Setenv("GATEWAY_API_KEYS", "sk-a=tenant-a")
+	t.Setenv("GATEWAY_TENANT_BUDGETS", "tenant-a:not-a-number")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "GATEWAY_TENANT_BUDGETS") {
+		t.Fatalf("err = %v, want GATEWAY_TENANT_BUDGETS error", err)
+	}
+}
+
+func TestLoadInvalidBudgetWindow(t *testing.T) {
+	unsetEnv(t, meteringEnvKeys...)
+	t.Setenv("GATEWAY_UPSTREAM", "http://localhost:8000")
+	t.Setenv("GATEWAY_API_KEYS", "sk-a=tenant-a")
+	t.Setenv("GATEWAY_BUDGET_WINDOW", "nonsense")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "GATEWAY_BUDGET_WINDOW") {
+		t.Fatalf("err = %v, want GATEWAY_BUDGET_WINDOW error", err)
+	}
+}
+
 func TestLoadMissingRequired(t *testing.T) {
-	unsetEnv(t, "GATEWAY_UPSTREAM", "GATEWAY_API_KEYS")
+	unsetEnv(t, append([]string{"GATEWAY_UPSTREAM", "GATEWAY_API_KEYS"}, meteringEnvKeys...)...)
 
 	_, err := Load()
 	if err == nil {

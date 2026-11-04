@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -15,7 +16,7 @@ func testLogger() *slog.Logger {
 }
 
 func TestMiddleware(t *testing.T) {
-	a := New(map[string]string{"sk-valid": "tenant-a"}, testLogger())
+	a := New(map[string]string{"sk-valid": "tenant-a"}, testLogger(), nil)
 
 	captured := make(chan string, 1)
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -70,5 +71,55 @@ func TestMiddleware(t *testing.T) {
 func TestTenantFromContextEmpty(t *testing.T) {
 	if _, ok := TenantFromContext(context.Background()); ok {
 		t.Error("TenantFromContext(empty context) = true")
+	}
+}
+
+type recordingRejections struct {
+	mu     sync.Mutex
+	reason []string
+}
+
+func (r *recordingRejections) RecordRejection(reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reason = append(r.reason, reason)
+}
+
+func (r *recordingRejections) reasons() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.reason...)
+}
+
+func TestMiddlewareReportsRejections(t *testing.T) {
+	tests := []struct {
+		name       string
+		authHeader string
+		want       string
+	}{
+		{"missing API key", "", "missing API key"},
+		{"invalid API key", "Bearer sk-invalid", "invalid API key"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rejections := &recordingRejections{}
+			a := New(map[string]string{"sk-valid": "tenant-a"}, testLogger(), rejections)
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+			if tt.authHeader != "" {
+				req.Header.Set("Authorization", tt.authHeader)
+			}
+
+			a.Middleware(http.NotFoundHandler()).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", rec.Code)
+			}
+			got := rejections.reasons()
+			if len(got) != 1 || got[0] != tt.want {
+				t.Fatalf("rejections = %v, want [%s]", got, tt.want)
+			}
+		})
 	}
 }
