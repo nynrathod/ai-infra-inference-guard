@@ -1,0 +1,39 @@
+# Strimzi Kafka cluster: single combined KRaft node (controller+broker),
+# ephemeral storage — sized for the dev metering backbone (usage events),
+# not production durability. The Strimzi operator itself is installed by
+# `make.ps1 metering` (pinned release).
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: usage-kafka
+  namespace: kafka
+spec:
+  kafka:
+    version: 3.8.0
+    metadataVersion: 3.8-IV0
+    replicas: 1
+    processRoles:
+      - controller
+      - broker
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    config:
+      offsets.topic.replication.factor: 1
+      transaction.state.log.replication.factor: 1
+      transaction.state.log.min.insync.replicas: 1
+      default.replication.factor: 1
+      min.insync.replicas: 1
+    storage:
+      type: ephemeral
+    resources:
+      requests:
+        cpu: 250m
+        memory: 1Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+  entityOperator:
+    topicOperator: {}
