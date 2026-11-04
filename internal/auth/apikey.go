@@ -12,15 +12,23 @@ import (
 
 type ctxKey struct{}
 
+// RejectionRecorder is notified when authentication rejects a request.
+// Implementations must be safe for concurrent use.
+type RejectionRecorder interface {
+	RecordRejection(reason string)
+}
+
 // Authenticator resolves API keys to tenants and guards tenant-facing routes.
 type Authenticator struct {
-	keys map[string]string
-	log  *slog.Logger
+	keys       map[string]string
+	log        *slog.Logger
+	rejections RejectionRecorder
 }
 
 // New returns an Authenticator backed by the given key-to-tenant mappings.
-func New(keys map[string]string, log *slog.Logger) *Authenticator {
-	return &Authenticator{keys: keys, log: log}
+// A nil rejections disables rejection reporting.
+func New(keys map[string]string, log *slog.Logger, rejections RejectionRecorder) *Authenticator {
+	return &Authenticator{keys: keys, log: log, rejections: rejections}
 }
 
 // Middleware rejects requests that do not carry a valid bearer token and
@@ -43,6 +51,9 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 }
 
 func (a *Authenticator) reject(w http.ResponseWriter, r *http.Request, reason string) {
+	if a.rejections != nil {
+		a.rejections.RecordRejection(reason)
+	}
 	a.log.Warn("request rejected",
 		"method", r.Method, "path", r.URL.Path, "remote", remoteIP(r), "reason", reason)
 	w.Header().Set("WWW-Authenticate", "Bearer")
