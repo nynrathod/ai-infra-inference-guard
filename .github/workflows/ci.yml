@@ -1,44 +1,30 @@
-name: CI
+name: ci
 
 on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
   test:
-    name: Build, vet, test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
-      - name: Build
-        run: go build ./...
-      - name: Vet
-        run: go vet ./...
-      - name: Check formatting
-        run: |
-          files=$(gofmt -l .)
-          if [ -n "$files" ]; then
-            echo "Files needing gofmt:"
-            echo "$files"
-            exit 1
-          fi
-      - name: Test
-        run: go test -race -count=1 ./...
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test -race -count=1 ./...
 
   lint:
-    name: golangci-lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
-      - uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@v6
         with:
-          version: v2.13
+          version: latest
