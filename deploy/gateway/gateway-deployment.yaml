@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: inference-guard
+  labels:
+    app: gateway
+    app.kubernetes.io/part-of: inference-guard
+spec:
+  # Per-tenant concurrency limits are enforced per gateway process, so a
+  # single replica keeps each tenant's limit global. Scale-out requires
+  # moving the counters to a shared store.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+        app.kubernetes.io/part-of: inference-guard
+    spec:
+      # The "gateway" Service would inject GATEWAY_PORT/GATEWAY_SERVICE_PORT
+      # env vars that look like configuration but are not read; disabling
+      # service links keeps the environment exactly what is declared below.
+      enableServiceLinks: false
+      containers:
+        - name: gateway
+          image: inference-guard/gateway:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GATEWAY_UPSTREAM
+              value: http://vllm:8000
+            - name: GATEWAY_TENANT_CONCURRENCY
+              value: "8"
+            - name: GATEWAY_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-api-keys
+                  key: api-keys
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
