@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: usage-consumer
+  namespace: inference-guard
+  labels:
+    app: usage-consumer
+    app.kubernetes.io/part-of: inference-guard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: usage-consumer
+  template:
+    metadata:
+      labels:
+        app: usage-consumer
+        app.kubernetes.io/part-of: inference-guard
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: usage-consumer
+          image: inference-guard/usage-consumer:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: BROKERS
+              value: usage-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092
+            - name: TOPIC
+              value: inference-usage
+            - name: GROUP_ID
+              value: usage-consumer
+            - name: REDIS_ADDR
+              value: redis:6379
+            - name: REPORT_INTERVAL
+              value: 60s
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
