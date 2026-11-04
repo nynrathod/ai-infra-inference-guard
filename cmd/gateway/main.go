@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/nynrathod/inference-guard/internal/admission"
 	"github.com/nynrathod/inference-guard/internal/auth"
 	"github.com/nynrathod/inference-guard/internal/config"
 	"github.com/nynrathod/inference-guard/internal/proxy"
@@ -32,6 +33,7 @@ func main() {
 		router.New(
 			log,
 			auth.New(cfg.APIKeys, log),
+			admission.New(cfg.TenantConcurrency),
 			proxy.New(cfg.UpstreamURL, log).Handler(),
 		),
 		log,
