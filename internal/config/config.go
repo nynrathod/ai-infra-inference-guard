@@ -16,6 +16,7 @@ type Config struct {
 	Addr              string
 	UpstreamURL       *url.URL
 	APIKeys           map[string]string
+	TenantConcurrency int
 	ReadHeaderTimeout time.Duration
 	ShutdownTimeout   time.Duration
 }
@@ -26,10 +27,12 @@ const (
 	keyAddr              = "addr"
 	keyUpstream          = "upstream"
 	keyAPIKeys           = "api_keys"
+	keyTenantConcurrency = "tenant_concurrency"
 	keyReadHeaderTimeout = "read_header_timeout"
 	keyShutdownTimeout   = "shutdown_timeout"
 
 	defaultAddr              = ":8080"
+	defaultTenantConcurrency = 8
 	defaultReadHeaderTimeout = 10 * time.Second
 	defaultShutdownTimeout   = 15 * time.Second
 )
@@ -42,10 +45,16 @@ func Load() (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 	v.SetDefault(keyAddr, defaultAddr)
+	v.SetDefault(keyTenantConcurrency, defaultTenantConcurrency)
 	v.SetDefault(keyReadHeaderTimeout, defaultReadHeaderTimeout)
 	v.SetDefault(keyShutdownTimeout, defaultShutdownTimeout)
 
 	var errs []error
+
+	concurrency := v.GetInt(keyTenantConcurrency)
+	if concurrency < 1 {
+		errs = append(errs, fmt.Errorf("%s must be >= 1", envName(keyTenantConcurrency)))
+	}
 
 	upstream, err := url.Parse(v.GetString(keyUpstream))
 	if err != nil || upstream.Scheme == "" || upstream.Host == "" {
@@ -65,6 +74,7 @@ func Load() (*Config, error) {
 		Addr:              v.GetString(keyAddr),
 		UpstreamURL:       upstream,
 		APIKeys:           apiKeys,
+		TenantConcurrency: concurrency,
 		ReadHeaderTimeout: v.GetDuration(keyReadHeaderTimeout),
 		ShutdownTimeout:   v.GetDuration(keyShutdownTimeout),
 	}, nil
