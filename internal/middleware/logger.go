@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/nynrathod/inference-guard/internal/auth"
@@ -72,6 +73,8 @@ func requestID(r *http.Request) string {
 		return id
 	}
 	buf := make([]byte, 8)
-	rand.Read(buf)
+	if _, err := rand.Read(buf); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 16)
+	}
 	return hex.EncodeToString(buf)
 }
