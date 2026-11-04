@@ -64,14 +64,10 @@ func TenantFromContext(ctx context.Context) (string, bool) {
 }
 
 func bearerToken(r *http.Request) (string, bool) {
-	header := r.Header.Get("Authorization")
-	const prefix = "Bearer "
-	if !strings.HasPrefix(header, prefix) {
+	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok {
 		return "", false
 	}
-	token := strings.TrimSpace(header[len(prefix):])
-	if token == "" {
-		return "", false
-	}
-	return token, true
+	token = strings.TrimSpace(token)
+	return token, token != ""
 }
