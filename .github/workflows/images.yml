@@ -1,0 +1,131 @@
+name: images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile"
+      - "Dockerfile.usage-consumer"
+      - "Dockerfile.vllm"
+      - ".github/workflows/images.yml"
+  workflow_dispatch:
+    inputs:
+      build_vllm:
+        description: "Also build the pre-baked vLLM image"
+        type: boolean
+        default: false
+      vllm_model:
+        description: "Hugging Face model id to pre-bake"
+        default: "Qwen/Qwen2.5-0.5B-Instruct"
+
+# Fill these from `terraform output` AFTER applying infra/gcp/cicd.tf:
+#   PROJECT_ID    <- project_id
+#   AR_LOCATION   <- region
+#   WIF_PROVIDER  <- github_actions_wif_provider
+#   GH_SA         <- github_actions_service_account
+env:
+  PROJECT_ID: "REPLACE_WITH_PROJECT_ID"
+  AR_LOCATION: "us-central1"
+  AR_REPO: "inference-guard"
+  WIF_PROVIDER: "REPLACE_WITH_WIF_PROVIDER"
+  GH_SA: "REPLACE_WITH_SERVICE_ACCOUNT"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.GH_SA }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.AR_LOCATION }}-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.AR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/gateway:${{ github.sha }}
+            ${{ env.AR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/gateway:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  usage-consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.GH_SA }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.AR_LOCATION }}-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.usage-consumer
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.AR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/usage-consumer:${{ github.sha }}
+            ${{ env.AR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/usage-consumer:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  vllm-prebaked:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_vllm }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MODEL: ${{ inputs.vllm_model || 'Qwen/Qwen2.5-0.5B-Instruct' }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.GH_SA }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.AR_LOCATION }}-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+      - name: Compute image tag from model id
+        run: echo "model_tag=$(printf '%s' "$MODEL" | tr '[:upper:]/' '[:lower:].')" >> "$GITHUB_ENV"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.vllm
+          push: true
+          platforms: linux/amd64
+          build-args: |
+            MODEL=${{ env.MODEL }}
+          secrets: |
+            hf_token=${{ secrets.HF_TOKEN }}
+          tags: |
+            ${{ env.AR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/vllm-prebaked:${{ env.model_tag }}
+            ${{ env.AR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/vllm-prebaked:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
