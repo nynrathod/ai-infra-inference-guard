@@ -1,0 +1,21 @@
+# Pre-bakes model weights into the vLLM image so GPU pods start without the
+# multi-GB Hugging Face download: ~1 min cold start instead of 10-25 min.
+#
+#   docker build -f Dockerfile.vllm --build-arg MODEL=Qwen/Qwen2.5-0.5B-Instruct \
+#     --secret id=hf_token,env=HF_TOKEN -t vllm-prebaked:dev .
+#
+# HF_TOKEN is only needed for gated models; it never enters the image layers.
+ARG VLLM_IMAGE=vllm/vllm-openai:v0.33.0
+FROM ${VLLM_IMAGE}
+ARG MODEL=Qwen/Qwen2.5-0.5B-Instruct
+
+RUN --mount=type=secret,id=hf_token \
+	export HF_TOKEN="$(cat /run/secrets/hf_token 2>/dev/null || true)" && \
+	if command -v huggingface-cli >/dev/null 2>&1; then \
+	huggingface-cli download "${MODEL}"; \
+	else \
+	hf download "${MODEL}"; \
+	fi
+
+# Weights are baked in: never touch the network at pod start.
+ENV HF_HUB_OFFLINE=1

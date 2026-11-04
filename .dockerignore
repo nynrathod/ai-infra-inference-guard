@@ -1,0 +1,9 @@
+.git
+.github
+infra/
+deploy/
+scripts/
+*.md
+LICENSE
+Makefile
+make.ps1
