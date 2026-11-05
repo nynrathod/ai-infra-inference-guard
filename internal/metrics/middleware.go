@@ -11,7 +11,8 @@ import (
 // Middleware instruments authenticated requests: it counts completions by
 // tenant and status, tracks in-flight requests, and measures total request
 // duration and time to first response byte. It must sit below the auth
-// middleware so every request is attributed to a tenant.
+// middleware so every request is attributed to a tenant. Any TTFT observer
+// registered via SetTTFTObserver is notified as well.
 func (m *Metrics) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tenant, _ := auth.TenantFromContext(r.Context())
@@ -23,7 +24,9 @@ func (m *Metrics) Middleware(next http.Handler) http.Handler {
 			m.requestsTotal.WithLabelValues(tenant, strconv.Itoa(rec.status)).Inc()
 			m.requestDuration.WithLabelValues(tenant).Observe(time.Since(rec.start).Seconds())
 			if !rec.firstWrite.IsZero() {
-				m.timeToFirstByte.WithLabelValues(tenant).Observe(rec.firstWrite.Sub(rec.start).Seconds())
+				ttft := rec.firstWrite.Sub(rec.start)
+				m.timeToFirstByte.WithLabelValues(tenant).Observe(ttft.Seconds())
+				m.notifyTTFT(tenant, ttft)
 			}
 		}()
 
