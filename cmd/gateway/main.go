@@ -6,9 +6,12 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/nynrathod/inference-guard/internal/admission"
+	"github.com/nynrathod/inference-guard/internal/aimd"
 	"github.com/nynrathod/inference-guard/internal/auth"
 	"github.com/nynrathod/inference-guard/internal/config"
 	"github.com/nynrathod/inference-guard/internal/metering"
@@ -28,46 +31,42 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Token budgets: shared Redis when configured, in-process otherwise.
-	var budgets metering.BudgetStore
-	if cfg.RedisAddr != "" {
-		redisStore := metering.NewRedisBudgetStore(cfg.RedisAddr, cfg.RedisPassword, cfg.BudgetWindow)
-		pingCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		if err := redisStore.Ping(pingCtx); err != nil {
-			cancel()
-			log.Error("cannot reach Redis (GATEWAY_REDIS_ADDR)", "addr", cfg.RedisAddr, "error", err)
-			os.Exit(1)
-		}
-		cancel()
-		budgets = redisStore
-		log.Info("token budgets backed by Redis", "addr", cfg.RedisAddr, "window", cfg.BudgetWindow.String())
-	} else {
-		budgets = metering.NewMemoryBudgetStore(cfg.BudgetWindow)
-		log.Info("token budgets in-process (set GATEWAY_REDIS_ADDR to share them across replicas)")
-	}
-
-	// Usage events: shipped to Kafka when brokers are configured.
-	var sink metering.EventSink = metering.NoopSink{}
-	if len(cfg.KafkaBrokers) > 0 {
-		sink = metering.NewKafkaSink(cfg.KafkaBrokers, cfg.UsageTopic, log)
-		log.Info("usage events shipping to Kafka", "brokers", cfg.KafkaBrokers, "topic", cfg.UsageTopic)
-	} else {
-		log.Info("usage events discarded (set GATEWAY_KAFKA_BROKERS to ship them)")
-	}
-
-	meter := metering.New(
-		metering.Options{
-			Window:        cfg.BudgetWindow,
-			ReserveTokens: cfg.BudgetReserveTokens,
-			Budgets:       cfg.TenantBudgets,
-			DefaultBudget: cfg.DefaultTenantBudget,
-		},
-		budgets,
-		sink,
-		log,
-	)
-
 	m := metrics.New()
+	admissionCtl := admission.New(cfg.TenantConcurrency)
+
+	meter := metering.New(metering.Options{
+		Window:        cfg.BudgetWindow,
+		ReserveTokens: cfg.BudgetReserveTokens,
+		Budgets:       cfg.TenantBudgets,
+		DefaultBudget: cfg.DefaultTenantBudget,
+	}, budgetStore(cfg, log), usageSink(cfg, log), log)
+	defer meter.Close()
+
+	if cfg.AIMDEnabled {
+		ctl := aimd.New(
+			aimd.Config{
+				BaseLimit:      cfg.TenantConcurrency,
+				MinLimit:       cfg.AIMDMinTenantConcurrency,
+				DecreaseFactor: cfg.AIMDDecreaseFactor,
+				AdditiveStep:   cfg.AIMDAdditiveStep,
+				RecoveryTicks:  cfg.AIMDRecoveryTicks,
+				QueueDepthHigh: cfg.AIMDQueueDepthHigh,
+				KVCacheHigh:    cfg.AIMDKVCacheHigh,
+				TTFTHigh:       cfg.AIMDTTFTHigh,
+				DominantShare:  cfg.AIMDDominantShare,
+				Interval:       cfg.AIMDInterval,
+			},
+			aimd.NewSignalScraper(cfg.VLLMMetricsURL, cfg.VLLMMetricsTimeout),
+			admissionCtl,
+			m.Registry(),
+			log,
+		)
+		m.SetTTFTObserver(ctl.ObserveTTFT)
+
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		go ctl.Run(ctx)
+	}
 
 	srv := server.New(
 		server.Config{
@@ -78,7 +77,7 @@ func main() {
 		router.New(
 			log,
 			auth.New(cfg.APIKeys, log, m),
-			admission.New(cfg.TenantConcurrency),
+			admissionCtl,
 			m,
 			meter,
 			proxy.New(cfg.UpstreamURL, log).Handler(),
@@ -86,12 +85,34 @@ func main() {
 		log,
 	)
 
-	runErr := srv.Run()
-	if closeErr := meter.Close(); closeErr != nil {
-		log.Warn("metering shutdown", "error", closeErr)
-	}
-	if runErr != nil {
-		log.Error("gateway terminated", "error", runErr)
+	if err := srv.Run(); err != nil {
+		log.Error("gateway terminated", "error", err)
 		os.Exit(1)
 	}
+}
+
+// budgetStore returns the shared token budget store: Redis when an address is
+// configured, so budgets hold across gateway replicas, otherwise an
+// in-process store for single-replica deployments.
+func budgetStore(cfg *config.Config, log *slog.Logger) metering.BudgetStore {
+	if cfg.RedisAddr == "" {
+		return metering.NewMemoryBudgetStore(cfg.BudgetWindow)
+	}
+	store := metering.NewRedisBudgetStore(cfg.RedisAddr, cfg.RedisPassword, cfg.BudgetWindow)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := store.Ping(ctx); err != nil {
+		log.Error("redis budget store unreachable", "addr", cfg.RedisAddr, "error", err)
+		os.Exit(1)
+	}
+	return store
+}
+
+// usageSink returns the usage event sink: a Kafka producer when brokers are
+// configured, otherwise nil, which makes metering discard events.
+func usageSink(cfg *config.Config, log *slog.Logger) metering.EventSink {
+	if len(cfg.KafkaBrokers) == 0 {
+		return nil
+	}
+	return metering.NewKafkaSink(cfg.KafkaBrokers, cfg.UsageTopic, log)
 }
