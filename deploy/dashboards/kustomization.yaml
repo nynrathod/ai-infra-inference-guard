@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Grafana's dashboard sidecar (enabled by default in kube-prometheus-stack)
+# watches ConfigMaps labelled grafana_dashboard=1 cluster-wide and loads them
+# into the folder named by the grafana_folder annotation.
+namespace: inference-guard
+
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/part-of: inference-guard
+  annotations:
+    grafana_folder: "Inference Guard"
+
+configMapGenerator:
+  - name: inference-guard-gateway-dashboard
+    files:
+      - inference-guard-gateway.json
+  - name: inference-guard-vllm-dashboard
+    files:
+      - inference-guard-vllm-tenants.json
