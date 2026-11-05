@@ -31,6 +31,8 @@ spec:
           env:
             - name: GATEWAY_UPSTREAM
               value: http://vllm:8000
+            - name: GATEWAY_VLLM_METRICS_URL
+              value: http://vllm:8000/metrics
             - name: GATEWAY_TENANT_CONCURRENCY
               value: "8"
             - name: GATEWAY_API_KEYS
