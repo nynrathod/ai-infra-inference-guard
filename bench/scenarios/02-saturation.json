@@ -1,0 +1,29 @@
+{
+  "name": "02-saturation",
+  "description": "Offered load far above what one L4 can serve: long completions from both tenants push vLLM queue depth and KV cache past the AIMD thresholds. Expect 429s with Retry-After, AIMD limit cuts, and TTFT growth until the controller contains the load.",
+  "model": "Qwen/Qwen3-8B",
+  "chat_template_kwargs": { "enable_thinking": false },
+  "duration_seconds": 180,
+  "cooldown_seconds": 45,
+  "request_timeout_seconds": 120,
+  "tenants": [
+    {
+      "name": "tenant-a",
+      "api_key": "env:BENCH_TENANT_A_KEY",
+      "qps": 16,
+      "max_in_flight": 16,
+      "stream": true,
+      "max_tokens": 512,
+      "prompt_tokens": 256
+    },
+    {
+      "name": "tenant-b",
+      "api_key": "env:BENCH_TENANT_B_KEY",
+      "qps": 8,
+      "max_in_flight": 8,
+      "stream": true,
+      "max_tokens": 256,
+      "prompt_tokens": 128
+    }
+  ]
+}

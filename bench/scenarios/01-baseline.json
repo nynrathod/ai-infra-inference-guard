@@ -1,0 +1,29 @@
+{
+  "name": "01-baseline",
+  "description": "Steady reference load: two well-behaved tenants at moderate streaming rates. Establishes the TTFT and goodput baseline before any stress is applied.",
+  "model": "Qwen/Qwen3-8B",
+  "chat_template_kwargs": { "enable_thinking": false },
+  "duration_seconds": 120,
+  "cooldown_seconds": 30,
+  "request_timeout_seconds": 90,
+  "tenants": [
+    {
+      "name": "tenant-a",
+      "api_key": "env:BENCH_TENANT_A_KEY",
+      "qps": 4,
+      "max_in_flight": 4,
+      "stream": true,
+      "max_tokens": 64,
+      "prompt_tokens": 32
+    },
+    {
+      "name": "tenant-b",
+      "api_key": "env:BENCH_TENANT_B_KEY",
+      "qps": 4,
+      "max_in_flight": 4,
+      "stream": true,
+      "max_tokens": 64,
+      "prompt_tokens": 32
+    }
+  ]
+}

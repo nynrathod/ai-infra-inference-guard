@@ -1,0 +1,32 @@
+{
+  "name": "04-disconnect-storm",
+  "description": "Clients abandon streams en masse: high disconnect probability right after the first token plus timed mid-stream aborts. Exercises gateway cancellation and metering hygiene: no leaked in-flight slots, no phantom tokens, goodput holds for well-behaved tenants.",
+  "model": "Qwen/Qwen3-8B",
+  "chat_template_kwargs": { "enable_thinking": false },
+  "duration_seconds": 120,
+  "cooldown_seconds": 30,
+  "request_timeout_seconds": 60,
+  "tenants": [
+    {
+      "name": "stormy",
+      "api_key": "env:BENCH_TENANT_A_KEY",
+      "qps": 6,
+      "max_in_flight": 8,
+      "stream": true,
+      "max_tokens": 256,
+      "prompt_tokens": 64,
+      "disconnect_after_first_byte": 0.7
+    },
+    {
+      "name": "patient",
+      "api_key": "env:BENCH_TENANT_B_KEY",
+      "qps": 4,
+      "max_in_flight": 6,
+      "stream": true,
+      "max_tokens": 256,
+      "prompt_tokens": 64,
+      "disconnect_after_first_byte": 0.4,
+      "abort_after_seconds": 1.5
+    }
+  ]
+}
