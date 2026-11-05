@@ -4,10 +4,16 @@ package metrics
 
 import (
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+// TTFTObserver receives the measured time to first byte of a request,
+// attributed to the authenticated tenant.
+type TTFTObserver func(tenant string, d time.Duration)
 
 // Metrics is the gateway's Prometheus instrumentation. All instruments are
 // registered on a private registry so the gateway never collides with
@@ -19,6 +25,9 @@ type Metrics struct {
 	requestDuration  *prometheus.HistogramVec
 	timeToFirstByte  *prometheus.HistogramVec
 	authRejections   *prometheus.CounterVec
+
+	ttftMu       sync.RWMutex
+	ttftObserver TTFTObserver
 }
 
 // New returns an initialized Metrics ready to be wired into the handler
@@ -62,6 +71,30 @@ func New() *Metrics {
 // Handler serves the Prometheus scrape endpoint.
 func (m *Metrics) Handler() http.Handler {
 	return promhttp.HandlerFor(m.reg, promhttp.HandlerOpts{})
+}
+
+// Registry exposes the private registry so background components can add
+// their own collectors to the same scrape endpoint.
+func (m *Metrics) Registry() *prometheus.Registry {
+	return m.reg
+}
+
+// SetTTFTObserver registers a callback invoked for every instrumented
+// request that produced a first response byte. Pass nil to detach one.
+func (m *Metrics) SetTTFTObserver(o TTFTObserver) {
+	m.ttftMu.Lock()
+	m.ttftObserver = o
+	m.ttftMu.Unlock()
+}
+
+// notifyTTFT invokes the registered TTFT observer, if any.
+func (m *Metrics) notifyTTFT(tenant string, d time.Duration) {
+	m.ttftMu.RLock()
+	o := m.ttftObserver
+	m.ttftMu.RUnlock()
+	if o != nil {
+		o(tenant, d)
+	}
 }
 
 // RecordRejection counts a request that failed authentication.
