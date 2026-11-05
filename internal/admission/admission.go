@@ -80,6 +80,17 @@ func (c *Controller) InFlight(tenant string) int {
 	return c.inFlightCount[tenant]
 }
 
+// Snapshot returns a copy of the current in-flight counts per tenant.
+func (c *Controller) Snapshot() map[string]int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]int, len(c.inFlightCount))
+	for tenant, n := range c.inFlightCount {
+		out[tenant] = n
+	}
+	return out
+}
+
 // Limit reports the current concurrency limit for the tenant.
 func (c *Controller) Limit(tenant string) int {
 	c.mu.Lock()
