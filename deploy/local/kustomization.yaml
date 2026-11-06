@@ -1,6 +1,17 @@
+# Full local stack on kind (Docker Desktop): vLLM on CPU, the gateway with
+# the metering backbone wired in (Redis budgets + Kafka usage events), the
+# Strimzi Kafka cluster, Prometheus PodMonitors, and the Grafana dashboards.
+# Same manifests the cloud stack uses, minus the GPU.
+#
+# ../base is referenced as a directory because kustomize refuses
+# individual file references above this directory (security rule).
+#
 resources:
-  - ../base/namespace.yaml
-  - ../base/vllm-deployment.yaml
-  - ../base/vllm-service.yaml
+  - ../base
+  - ../gateway
+  - ../metering
+  - ../kafka
+  - ../dashboards
 patches:
   - path: patch.yaml
+  - path: gateway-metering-patch.yaml

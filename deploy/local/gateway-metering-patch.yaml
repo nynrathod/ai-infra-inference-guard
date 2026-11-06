@@ -1,0 +1,26 @@
+# Local-only gateway wiring: the full local stack runs Kafka + Redis, so the
+# gateway gets the metering backbone (usage events to Kafka, token budgets in
+# Redis) and the AIMD controller enabled against the vLLM metrics endpoint.
+# Kept out of deploy/gateway on purpose: the base deployment stays minimal and
+# metering stays opt-in per environment.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: inference-guard
+spec:
+  template:
+    spec:
+      containers:
+        - name: gateway
+          env:
+            - name: GATEWAY_KAFKA_BROKERS
+              value: usage-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092
+            - name: GATEWAY_USAGE_TOPIC
+              value: inference-usage
+            - name: GATEWAY_REDIS_ADDR
+              value: redis:6379
+            - name: GATEWAY_AIMD_ENABLED
+              value: "true"
+            - name: GATEWAY_DEFAULT_TENANT_BUDGET
+              value: "10000000"

@@ -1,20 +1,51 @@
 # Strimzi Kafka cluster: single combined KRaft node (controller+broker),
 # ephemeral storage — sized for the dev metering backbone (usage events),
 # not production durability. The Strimzi operator itself is installed by
-# `make.ps1 metering` (pinned release).
+# make.ps1 (pinned release 0.43.0, which bundles Kafka 3.7.x and 3.8.0).
+#
+# release — KRaft roles are a property of KafkaNodePool.spec.roles, and
+# when node pools are enabled, replicas/storage/resources also belong in
+# the pool, not in the Kafka CR. This shape follows the official 0.43.0
+# examples: packaging/examples/kafka/kraft/kafka-single-node.yaml and
+# packaging/examples/kafka/kraft/kafka-ephemeral.yaml.
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: dual-role
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: usage-kafka
+spec:
+  replicas: 1
+  roles:
+    - controller
+    - broker
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: ephemeral
+        kraftMetadata: shared
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+---
 apiVersion: kafka.strimzi.io/v1beta2
 kind: Kafka
 metadata:
   name: usage-kafka
   namespace: kafka
+  annotations:
+    strimzi.io/node-pools: enabled
+    strimzi.io/kraft: enabled
 spec:
   kafka:
     version: 3.8.0
     metadataVersion: 3.8-IV0
-    replicas: 1
-    processRoles:
-      - controller
-      - broker
     listeners:
       - name: plain
         port: 9092
@@ -26,14 +57,5 @@ spec:
       transaction.state.log.min.insync.replicas: 1
       default.replication.factor: 1
       min.insync.replicas: 1
-    storage:
-      type: ephemeral
-    resources:
-      requests:
-        cpu: 250m
-        memory: 1Gi
-      limits:
-        cpu: "1"
-        memory: 2Gi
   entityOperator:
     topicOperator: {}

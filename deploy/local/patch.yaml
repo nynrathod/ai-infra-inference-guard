@@ -8,13 +8,27 @@ spec:
     spec:
       nodeSelector: null
       tolerations: null
+      volumes:
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
       containers:
         - name: vllm
           image: vllm/vllm-openai-cpu:v0.33.0
+          volumeMounts:
+            - name: shm
+              mountPath: /dev/shm
+          env:
+            - name: VLLM_CPU_KVCACHE_SPACE
+              value: "2"
+            - name: OMP_NUM_THREADS
+              value: "4"
           args:
             - --model=Qwen/Qwen2.5-0.5B-Instruct
             - --served-model-name=Qwen/Qwen3-8B
             - --max-model-len=8192
+            - --enforce-eager
             - --disable-log-requests
           readinessProbe:
             httpGet:
@@ -36,4 +50,5 @@ spec:
               memory: 2Gi
             limits:
               cpu: "4"
-              memory: 6Gi
+              memory: 10Gi
+              nvidia.com/gpu: null
