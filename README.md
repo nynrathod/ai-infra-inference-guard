@@ -24,7 +24,7 @@ Prometheus scrapes gateway + vLLM ──▶ Grafana dashboards
 | Redis 7.2 | Per-tenant usage roll-ups |
 | vLLM 0.33 | OpenAI-compatible backend (small Qwen model for demos) |
 | kube-prometheus-stack | Prometheus + Grafana |
-| Terraform | GKE cluster, Artifact Registry, monitoring Helm release, GitHub Actions WIF |
+| Terraform | GKE cluster, Artifact Registry, monitoring Helm release |
 
 ## Repo layout
 
@@ -33,7 +33,7 @@ cmd/gateway, cmd/usage-consumer    Go services
 deploy/base                        kustomize base (GPU-sized vLLM)
 deploy/local                       CPU overlay for kind (KV-cache and thread tuned)
 deploy/gateway, deploy/kafka, deploy/metering   per-component manifests
-infra/gcp                          Terraform: GKE, Artifact Registry, WIF CI/CD, monitoring
+infra/gcp                          Terraform: GKE, Artifact Registry, monitoring
 justfile                           cross-platform task runner (mac / linux / windows)
 make.ps1                           Windows-native runner, same tasks as the justfile
 writeup/                           results, limitations, demo script
@@ -174,18 +174,19 @@ Swap in a bigger model by editing the vLLM args in `deploy/base` — keep
   The service port is not 80. `just gateway-smoke` reads the real port
   automatically; if you forward manually, read it first:
   `kubectl -n inference-guard get svc gateway`
+- **`strimzi-cluster-operator exceeded its progress deadline`**
+  The operator pod did not come up. `just up` restarts it once automatically
+  and waits again; only if that also fails does it print the full diagnosis
+  (pods, deployment conditions, events, operator log). Re-run `just up` - it
+  resumes from where it stopped.
+- **`timed out waiting for the condition on kafkas/usage-kafka`**
+  The Kafka broker did not become Ready in 15 minutes. `just up` prints the pod
+  states, events and operator log automatically when this happens. A re-run of
+  `just up` resumes from where it stopped - everything is idempotent.
 - **Grafana draws a "Random Walk" curve**
   You are on the built-in demo datasource. Switch the datasource to **Prometheus**.
 - **A port-forward stops when you close its window**
   That is how port-forwards work. Keep the window open while you use the browser.
-
-## CI/CD (optional)
-
-`infra/gcp/cicd.tf` provisions keyless GitHub Actions auth (Workload Identity
-Federation) for `nynrathod/inference-guard`. Actions can build and push images
-to Artifact Registry with zero stored secrets. Outputs:
-`artifact_registry_url`, `github_actions_wif_provider`,
-`github_actions_service_account`.
 
 ## Cost note
 
