@@ -35,6 +35,23 @@ spec:
               value: http://vllm:8000/metrics
             - name: GATEWAY_TENANT_CONCURRENCY
               value: "8"
+            # Full metering backbone, same on GKE and kind: the service DNS
+            # names are identical in both environments (Redis and the
+            # Strimzi bootstrap run in this namespace / kafka), so the cloud
+            # path gets Redis token budgets and Kafka usage events too —
+            # no silent fallback to in-memory accounting.
+            - name: GATEWAY_KAFKA_BROKERS
+              value: usage-kafka-kafka-bootstrap.kafka.svc.cluster.local:9092
+            - name: GATEWAY_USAGE_TOPIC
+              value: inference-usage
+            - name: GATEWAY_REDIS_ADDR
+              value: redis:6379
+            - name: GATEWAY_AIMD_ENABLED
+              value: "true"
+            - name: GATEWAY_TOKEN_ESTIMATOR
+              value: chars4
+            - name: GATEWAY_DEFAULT_TENANT_BUDGET
+              value: "10000000"
             - name: GATEWAY_API_KEYS
               valueFrom:
                 secretKeyRef:
