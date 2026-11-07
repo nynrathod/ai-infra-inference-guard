@@ -26,7 +26,6 @@ spec:
               value: "4"
           args:
             - --model=Qwen/Qwen2.5-0.5B-Instruct
-            - --served-model-name=Qwen/Qwen3-8B
             - --max-model-len=8192
             - --enforce-eager
             - --disable-log-requests

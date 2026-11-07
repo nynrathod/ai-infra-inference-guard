@@ -6,6 +6,9 @@
 # ../base is referenced as a directory because kustomize refuses
 # individual file references above this directory (security rule).
 #
+# The gateway's metering env (Redis, Kafka, AIMD) lives in deploy/gateway
+# itself: the service DNS names are identical on kind and GKE, so both
+# environments get the full backbone and neither silently degrades.
 resources:
   - ../base
   - ../gateway
@@ -14,4 +17,3 @@ resources:
   - ../dashboards
 patches:
   - path: patch.yaml
-  - path: gateway-metering-patch.yaml
