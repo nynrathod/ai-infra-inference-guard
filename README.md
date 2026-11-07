@@ -134,17 +134,30 @@ Missing or unknown key returns 401 and increments `gateway_auth_rejections_total
 
 ## Try it
 
-After `just gateway-smoke` (or any port-forward to the gateway), discover the
-served model first — nothing hardcodes a model name:
+Zero typing, works on every OS — opens the tunnel, checks health, 401, model
+discovery and streaming, prints metrics:
+
+```bash
+just gateway-smoke
+```
+
+Prefer curl by hand? Open the tunnel first and keep it running
+(`kubectl -n inference-guard port-forward deploy/gateway 18080:8080`), then
+copy **one line at a time** for your shell. Nothing hardcodes a model name.
+
+PowerShell 7.3+ / Linux / macOS / Git Bash / WSL (the common case):
 
 ```bash
 curl -s http://localhost:18080/v1/models -H "Authorization: Bearer dev-key-a"
-# pick the first id, then:
-curl -s http://localhost:18080/v1/chat/completions \
-  -H "Authorization: Bearer dev-key-a" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"Qwen/Qwen2.5-0.5B-Instruct","messages":[{"role":"user","content":"Say OK"}],"max_tokens":5}'
+# use the id the command above returned (Qwen/Qwen2.5-0.5B-Instruct is the default):
+curl -s http://localhost:18080/v1/chat/completions -H "Authorization: Bearer dev-key-a" -H "Content-Type: application/json" -d '{"model":"Qwen/Qwen2.5-0.5B-Instruct","messages":[{"role":"user","content":"Say OK"}],"max_tokens":5}'
 ```
+
+Why two spellings: PowerShell 5.1 and PowerShell 7.3+ hand quotes to native
+executables in opposite ways — no single JSON spelling works in both. Your
+shell told you which block to use: if `curl` alone works, use the first
+block; if you see an `Invoke-WebRequest` error, you are on 5.1 — use the
+second block.
 
 One request proves the API works, but it is invisible in Grafana: Prometheus
 scrapes every 30s and the `rate()`/`increase()` panels need several samples.
