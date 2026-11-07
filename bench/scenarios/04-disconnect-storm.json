@@ -1,8 +1,9 @@
 {
   "name": "04-disconnect-storm",
   "description": "Clients abandon streams en masse: high disconnect probability right after the first token plus timed mid-stream aborts. Exercises gateway cancellation and metering hygiene: no leaked in-flight slots, no phantom tokens, goodput holds for well-behaved tenants.",
-  "model": "Qwen/Qwen3-8B",
-  "chat_template_kwargs": { "enable_thinking": false },
+  "chat_template_kwargs": {
+    "enable_thinking": false
+  },
   "duration_seconds": 120,
   "cooldown_seconds": 30,
   "request_timeout_seconds": 60,
@@ -28,5 +29,6 @@
       "disconnect_after_first_byte": 0.4,
       "abort_after_seconds": 1.5
     }
-  ]
+  ],
+  "latency_target_ms": 5000
 }

@@ -1,8 +1,9 @@
 {
   "name": "02-saturation",
-  "description": "Offered load far above what one L4 can serve: long completions from both tenants push vLLM queue depth and KV cache past the AIMD thresholds. Expect 429s with Retry-After, AIMD limit cuts, and TTFT growth until the controller contains the load.",
-  "model": "Qwen/Qwen3-8B",
-  "chat_template_kwargs": { "enable_thinking": false },
+  "description": "Overload comparison: the same offered load is run under all four control modes (none, static concurrency, request-rate limit, adaptive AIMD). The matrix runner first measures sustainable capacity with a load ramp, then scales this scenario's tenant mix so the total offered load is 2x that measured capacity - the overload factor is measured, not asserted. Expect 429s with Retry-After and TTFT growth under the uncontrolled modes, and bounded TTFT with higher qualified goodput under adaptive control.",
+  "chat_template_kwargs": {
+    "enable_thinking": false
+  },
   "duration_seconds": 180,
   "cooldown_seconds": 45,
   "request_timeout_seconds": 120,
@@ -25,5 +26,6 @@
       "max_tokens": 256,
       "prompt_tokens": 128
     }
-  ]
+  ],
+  "latency_target_ms": 2500
 }

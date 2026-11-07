@@ -1,8 +1,9 @@
 {
   "name": "03-noisy-neighbor",
   "description": "One tenant hammers long completions while a light tenant trickles short ones. Success criterion: the quiet tenant's TTFT and goodput stay protected while the noisy tenant absorbs the cuts (dominant-share decrease, per-tenant admission).",
-  "model": "Qwen/Qwen3-8B",
-  "chat_template_kwargs": { "enable_thinking": false },
+  "chat_template_kwargs": {
+    "enable_thinking": false
+  },
   "duration_seconds": 180,
   "cooldown_seconds": 45,
   "request_timeout_seconds": 120,
@@ -25,5 +26,6 @@
       "max_tokens": 32,
       "prompt_tokens": 32
     }
-  ]
+  ],
+  "latency_target_ms": 2500
 }
