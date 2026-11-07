@@ -200,3 +200,89 @@ func TestMiddlewareLeavesNonStreamingBodiesAlone(t *testing.T) {
 		t.Fatalf("body = %q, want unchanged", gotBody)
 	}
 }
+
+func TestChars4EstimatorReservesPromptPlusMaxTokens(t *testing.T) {
+	store := NewMemoryBudgetStore(time.Hour)
+	sink := &capturingSink{}
+	meter := New(Options{
+		Window:         time.Hour,
+		ReserveTokens:  64,
+		TokenEstimator: TokenEstimatorChars4,
+		Budgets:        map[string]int64{"tenant-a": 500},
+	}, store, sink, testLogger())
+
+	// 400 chars of prompt -> ~100 estimated prompt tokens, plus max_tokens 100
+	// -> reservation 200, well inside the 500 budget.
+	content := strings.Repeat("abcd", 100)
+	body := `{"model":"m","messages":[{"role":"user","content":"` + content + `"}],"max_tokens":100}`
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ := io.ReadAll(r.Body)
+		if string(got) != body {
+			t.Errorf("upstream body changed: %d bytes, want the original %d", len(got), len(body))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"usage":{"prompt_tokens":400,"completion_tokens":100,"total_tokens":500}}`))
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-test")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	chain(meter, upstream).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := store.used("tenant-a"); got != 500 {
+		t.Errorf("store used = %d, want 500 (settled to actual usage)", got)
+	}
+}
+
+func TestChars4EstimatorRejectsLongPromptsEarly(t *testing.T) {
+	store := NewMemoryBudgetStore(time.Hour)
+	meter := New(Options{
+		Window:         time.Hour,
+		ReserveTokens:  64,
+		TokenEstimator: TokenEstimatorChars4,
+		Budgets:        map[string]int64{"tenant-a": 150},
+	}, store, NoopSink{}, testLogger())
+
+	// 400 chars -> ~100 prompt tokens + max_tokens 100 = 200 > 150 budget:
+	// the request must be rejected up front instead of under-reserving.
+	content := strings.Repeat("abcd", 100)
+	body := `{"model":"m","messages":[{"role":"user","content":"` + content + `"}],"max_tokens":100}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-test")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	chain(meter, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream reached despite estimated over-budget request")
+	})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", rec.Code)
+	}
+}
+
+func TestFixedEstimatorKeepsFlatReservation(t *testing.T) {
+	store := NewMemoryBudgetStore(time.Hour)
+	meter := New(Options{Window: time.Hour, ReserveTokens: 64}, store, NoopSink{}, testLogger())
+
+	// A long prompt with the default (fixed) estimator still reserves the
+	// flat amount: direct construction keeps the historic behavior.
+	content := strings.Repeat("abcd", 100)
+	body := `{"model":"m","messages":[{"role":"user","content":"` + content + `"}],"max_tokens":100}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-test")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	chain(meter, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (flat reservation well inside budget)", rec.Code)
+	}
+}

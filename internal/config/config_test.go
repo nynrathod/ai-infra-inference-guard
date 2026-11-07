@@ -228,3 +228,45 @@ func TestLoadInvalidConcurrency(t *testing.T) {
 		t.Fatalf("err = %v, want GATEWAY_TENANT_CONCURRENCY error", err)
 	}
 }
+
+func TestLoadRateLimitAndEstimator(t *testing.T) {
+	t.Setenv("GATEWAY_UPSTREAM", "http://localhost:8000")
+	t.Setenv("GATEWAY_API_KEYS", "sk-a=tenant-a")
+	t.Setenv("GATEWAY_RATE_LIMIT_RPS", "5.5")
+	t.Setenv("GATEWAY_RATE_LIMIT_BURST", "10")
+	t.Setenv("GATEWAY_TOKEN_ESTIMATOR", "Chars4")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.RateLimitRPS != 5.5 {
+		t.Errorf("RateLimitRPS = %v, want 5.5", cfg.RateLimitRPS)
+	}
+	if cfg.RateLimitBurst != 10 {
+		t.Errorf("RateLimitBurst = %d, want 10", cfg.RateLimitBurst)
+	}
+	if cfg.TokenEstimator != "chars4" {
+		t.Errorf("TokenEstimator = %q, want normalized chars4", cfg.TokenEstimator)
+	}
+}
+
+func TestLoadRejectsUnknownEstimator(t *testing.T) {
+	t.Setenv("GATEWAY_UPSTREAM", "http://localhost:8000")
+	t.Setenv("GATEWAY_API_KEYS", "sk-a=tenant-a")
+	t.Setenv("GATEWAY_TOKEN_ESTIMATOR", "wild-guess")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted an unknown token estimator")
+	}
+}
+
+func TestLoadRejectsNegativeRateLimit(t *testing.T) {
+	t.Setenv("GATEWAY_UPSTREAM", "http://localhost:8000")
+	t.Setenv("GATEWAY_API_KEYS", "sk-a=tenant-a")
+	t.Setenv("GATEWAY_RATE_LIMIT_RPS", "-1")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted a negative rate limit")
+	}
+}

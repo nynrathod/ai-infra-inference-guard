@@ -36,12 +36,17 @@ func TestPercentile(t *testing.T) {
 
 func TestSummarizeCountsAndGoodput(t *testing.T) {
 	results := []RequestResult{
-		{Tenant: "a", Outcome: OutcomeSuccess, TTFTMs: 100, TotalMs: 900, Tokens: 10},
-		{Tenant: "a", Outcome: OutcomeSuccess, TTFTMs: 300, TotalMs: 1100, Tokens: 10},
+		{Tenant: "a", Outcome: OutcomeSuccess, Streamed: true, TTFTMs: 100, TotalMs: 900, Tokens: 10},
+		{Tenant: "a", Outcome: OutcomeSuccess, Streamed: true, TTFTMs: 300, TotalMs: 1100, Tokens: 10},
 		{Tenant: "a", Outcome: OutcomeRateLimited, TTFTMs: -1, TotalMs: 5, RetryAfterSeconds: 2},
-		{Tenant: "b", Outcome: OutcomeClientAborted, TTFTMs: 120, TotalMs: 200, Tokens: 3},
+		{Tenant: "b", Outcome: OutcomeClientAborted, Streamed: true, TTFTMs: 120, TotalMs: 200, Tokens: 3},
 	}
-	stats := Summarize(results, map[string]int{"a": 4, "b": 1}, 10)
+	stats := Summarize(SummaryInput{
+		Results:       results,
+		PeakInFlight:  map[string]int{"a": 4, "b": 1},
+		Load:          map[string]TenantLoad{"a": {Offered: 3, HarnessDropped: 0}, "b": {Offered: 1, HarnessDropped: 0}},
+		ActiveSeconds: 10,
+	})
 	if len(stats) != 2 {
 		t.Fatalf("expected 2 tenants, got %d", len(stats))
 	}
@@ -51,6 +56,9 @@ func TestSummarizeCountsAndGoodput(t *testing.T) {
 	}
 	if a.Requests != 3 || a.Successes != 2 || a.RateLimited != 1 {
 		t.Fatalf("bad counts for a: %+v", a)
+	}
+	if a.Offered != 3 || a.HarnessDropped != 0 {
+		t.Fatalf("bad offered load for a: %+v", a)
 	}
 	if a.CompletionTokens != 20 {
 		t.Fatalf("completion tokens = %d, want 20", a.CompletionTokens)
@@ -72,5 +80,72 @@ func TestSummarizeCountsAndGoodput(t *testing.T) {
 	}
 	if math.Abs(b.GoodputTokensPerSec-0.3) > 1e-9 {
 		t.Fatalf("goodput = %v, want 0.3", b.GoodputTokensPerSec)
+	}
+}
+
+func TestSummarizeQualifiesByLatencyTarget(t *testing.T) {
+	results := []RequestResult{
+		// Streaming: judged on time to first token. Fast token, slow tail.
+		{Tenant: "a", Outcome: OutcomeSuccess, Streamed: true, TTFTMs: 200, TotalMs: 5000, Tokens: 8},
+		// Streaming success whose first token missed the 500ms deadline.
+		{Tenant: "a", Outcome: OutcomeSuccess, Streamed: true, TTFTMs: 800, TotalMs: 900, Tokens: 8},
+		// Non-streaming: judged on the whole response time.
+		{Tenant: "a", Outcome: OutcomeSuccess, Streamed: false, TotalMs: 400, Tokens: 8},
+		{Tenant: "a", Outcome: OutcomeSuccess, Streamed: false, TotalMs: 900, Tokens: 8},
+		// A 429 never qualifies.
+		{Tenant: "a", Outcome: OutcomeRateLimited, TTFTMs: -1, TotalMs: 3},
+	}
+	stats := Summarize(SummaryInput{
+		Results:         results,
+		ActiveSeconds:   10,
+		LatencyTargetMS: 500,
+	})
+	if len(stats) != 1 {
+		t.Fatalf("expected 1 tenant, got %d", len(stats))
+	}
+	st := stats[0]
+	if st.Successes != 4 {
+		t.Fatalf("successes = %d, want 4", st.Successes)
+	}
+	if st.QualifiedSuccesses != 2 {
+		t.Fatalf("qualified successes = %d, want 2 (fast token + fast non-stream)", st.QualifiedSuccesses)
+	}
+	if st.GoodputQualifiedRPS != 0.2 {
+		t.Fatalf("qualified goodput = %v, want 0.2 req/s", st.GoodputQualifiedRPS)
+	}
+}
+
+func TestSummarizeWithoutTargetQualifiesEverySuccess(t *testing.T) {
+	results := []RequestResult{
+		{Tenant: "a", Outcome: OutcomeSuccess, Streamed: true, TTFTMs: 9000, TotalMs: 9000, Tokens: 1},
+		{Tenant: "a", Outcome: OutcomeRateLimited, TTFTMs: -1, TotalMs: 1},
+	}
+	stats := Summarize(SummaryInput{Results: results, ActiveSeconds: 2})
+	st := stats[0]
+	if st.QualifiedSuccesses != 1 || st.GoodputQualifiedRPS != 0.5 {
+		t.Fatalf("qualification without a target: %+v", st)
+	}
+}
+
+func TestTotalsAggregatesAcrossTenants(t *testing.T) {
+	report := RunReport{
+		ActiveSeconds: 10,
+		Tenants: []TenantStats{
+			{Name: "a", Requests: 10, Offered: 12, HarnessDropped: 2, Successes: 8, QualifiedSuccesses: 6, CompletionTokens: 100, TTFTP95Ms: 300},
+			{Name: "b", Requests: 5, Offered: 6, HarnessDropped: 1, Successes: 4, QualifiedSuccesses: 4, CompletionTokens: 50, TTFTP95Ms: 900},
+		},
+	}
+	total := report.Totals()
+	if total.Requests != 15 || total.Offered != 18 || total.HarnessDropped != 3 {
+		t.Fatalf("bad totals: %+v", total)
+	}
+	if total.Successes != 12 || total.QualifiedSuccesses != 10 {
+		t.Fatalf("bad success totals: %+v", total)
+	}
+	if total.TTFTP95Ms != 900 {
+		t.Fatalf("worst ttft p95 = %v, want 900", total.TTFTP95Ms)
+	}
+	if total.GoodputQualifiedRPS != 1 {
+		t.Fatalf("qualified goodput = %v, want 1", total.GoodputQualifiedRPS)
 	}
 }

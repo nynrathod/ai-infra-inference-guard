@@ -11,8 +11,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// TTFTObserver receives the measured time to first byte of a request,
-// attributed to the authenticated tenant.
+// TTFTObserver receives the measured time to first content token of a
+// request, attributed to the authenticated tenant.
 type TTFTObserver func(tenant string, d time.Duration)
 
 // Metrics is the gateway's Prometheus instrumentation. All instruments are
@@ -24,6 +24,7 @@ type Metrics struct {
 	requestsInFlight *prometheus.GaugeVec
 	requestDuration  *prometheus.HistogramVec
 	timeToFirstByte  *prometheus.HistogramVec
+	timeToFirstToken *prometheus.HistogramVec
 	authRejections   *prometheus.CounterVec
 
 	ttftMu       sync.RWMutex
@@ -50,7 +51,12 @@ func New() *Metrics {
 		}, []string{"tenant"}),
 		timeToFirstByte: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "gateway_time_to_first_byte_seconds",
-			Help:    "Time from request admission to the first response byte, by tenant.",
+			Help:    "Time from request admission to the first response byte, by tenant (diagnostic; includes rejected responses).",
+			Buckets: prometheus.DefBuckets,
+		}, []string{"tenant"}),
+		timeToFirstToken: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "gateway_time_to_first_token_seconds",
+			Help:    "Time from request admission to the first streamed content token, by tenant (the controller's latency signal; rejections excluded).",
 			Buckets: prometheus.DefBuckets,
 		}, []string{"tenant"}),
 		authRejections: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -63,6 +69,7 @@ func New() *Metrics {
 		m.requestsInFlight,
 		m.requestDuration,
 		m.timeToFirstByte,
+		m.timeToFirstToken,
 		m.authRejections,
 	)
 	return m
@@ -80,7 +87,8 @@ func (m *Metrics) Registry() *prometheus.Registry {
 }
 
 // SetTTFTObserver registers a callback invoked for every instrumented
-// request that produced a first response byte. Pass nil to detach one.
+// request that produced a first content token. Rejected requests never
+// invoke it. Pass nil to detach one.
 func (m *Metrics) SetTTFTObserver(o TTFTObserver) {
 	m.ttftMu.Lock()
 	m.ttftObserver = o
