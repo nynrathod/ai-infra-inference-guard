@@ -1,4 +1,4 @@
-# inference-guard task runner — same tasks as make.ps1, works on Windows, macOS, Linux.
+# inference-guard task runner — works on Windows, macOS, Linux.
 # Windows recipes run in the built-in PowerShell. macOS/Linux recipes run in the built-in sh.
 # The only install is the runner itself, once per machine:
 #   winget install Casey.Just   (Windows)  |  brew install just   (macOS)  |  sudo apt install just   (Linux)
@@ -9,6 +9,7 @@ set shell := ["sh", "-c"]
 set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
 tf_dir := "infra/gcp"
+calibration_scenario := "bench/scenarios/02-saturation.json"
 
 # list all tasks
 default:
@@ -35,7 +36,9 @@ plan:
 # full GKE stack: provision, build+push images, Kafka, deploy, wait for rollouts
 [unix]
 up:
-    @echo "== terraform: provision (keeps what exists)" && \
+    @echo "== docker: engine check" && \
+    docker info >/dev/null 2>&1 || { echo "ERROR: docker daemon not reachable - start it and re-run: just up" ; exit 1 ; } && \
+    echo "== terraform: provision (keeps what exists)" && \
     terraform -chdir={{tf_dir}} init && terraform -chdir={{tf_dir}} apply -auto-approve && \
     AR=$(terraform -chdir={{tf_dir}} output -raw artifact_registry_url) && \
     CLUSTER=$(terraform -chdir={{tf_dir}} output -raw cluster_name) && \
@@ -47,9 +50,13 @@ up:
     gcloud auth configure-docker "${AR%%/*}" --quiet && \
     TAG=$(date +%Y%m%d-%H%M%S) && \
     echo "== build + push gateway:$TAG" && \
-    docker build -f Dockerfile -t "$AR/gateway:$TAG" . && docker push "$AR/gateway:$TAG" && \
+    docker build -f Dockerfile -t "$AR/gateway:$TAG" . && \
+    pushed=0 ; for t in 1 2 3 4 5; do if docker push "$AR/gateway:$TAG" ; then pushed=1 ; break ; fi ; echo "== push failed (attempt $t/5) - transient network/DNS - retrying in 20s" ; sleep 20 ; done ; \
+    [ "$pushed" = 1 ] || { echo "ERROR: docker push kept failing - docker cannot reach the registry, check the network and re-run: just up" ; exit 1 ; } && \
     echo "== build + push usage-consumer:$TAG" && \
-    docker build -f Dockerfile.usage-consumer -t "$AR/usage-consumer:$TAG" . && docker push "$AR/usage-consumer:$TAG" && \
+    docker build -f Dockerfile.usage-consumer -t "$AR/usage-consumer:$TAG" . && \
+    pushed=0 ; for t in 1 2 3 4 5; do if docker push "$AR/usage-consumer:$TAG" ; then pushed=1 ; break ; fi ; echo "== push failed (attempt $t/5) - transient network/DNS - retrying in 20s" ; sleep 20 ; done ; \
+    [ "$pushed" = 1 ] || { echo "ERROR: docker push kept failing - docker cannot reach the registry, check the network and re-run: just up" ; exit 1 ; } && \
     echo "== namespaces" && \
     for ns in inference-guard kafka monitoring; do kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f - >/dev/null; done && \
     echo "== gateway api-keys secret" && \
@@ -120,7 +127,23 @@ up:
 
 [windows]
 up:
-    @echo '== terraform: provision (keeps what exists)' ; \
+    @echo '== docker: engine check' ; \
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { echo 'ERROR: docker CLI not found - install Docker Desktop first: https://docs.docker.com/desktop/setup/install/windows-install/' ; exit 1 } ; \
+    docker info > $null 2>$null ; \
+    if ($LASTEXITCODE -ne 0) { \
+      echo '== docker engine not running - starting Docker Desktop (first start can take 1-3 min)' ; \
+      $dd = 'C:\Program Files\Docker\Docker\Docker Desktop.exe' ; \
+      if (Test-Path $dd) { Start-Process $dd } ; \
+      $dockerOk = $false ; \
+      foreach ($i in 1..60) { \
+        Start-Sleep -Seconds 5 ; \
+        docker info > $null 2>$null ; \
+        if ($LASTEXITCODE -eq 0) { $dockerOk = $true ; break } ; \
+        if ($i % 6 -eq 0) { echo ('  [' + ($i * 5) + 's] still waiting for the docker engine...') } ; \
+      } ; \
+      if (-not $dockerOk) { echo 'ERROR: docker engine still unreachable - open Docker Desktop, wait for the green engine status, then re-run: just up' ; exit 1 } ; \
+    } ; \
+    echo '== terraform: provision (keeps what exists)' ; \
     terraform -chdir={{tf_dir}} init ; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } ; \
     terraform -chdir={{tf_dir}} apply -auto-approve ; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } ; \
     $AR = (terraform -chdir={{tf_dir}} output -raw artifact_registry_url) ; \
@@ -136,10 +159,24 @@ up:
     $Tag = Get-Date -Format 'yyyyMMdd-HHmmss' ; \
     echo ('== build + push gateway:' + $Tag) ; \
     docker build -f Dockerfile -t ($AR + '/gateway:' + $Tag) . ; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } ; \
-    docker push ($AR + '/gateway:' + $Tag) ; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } ; \
+    $pushed = $false ; \
+    foreach ($try in 1..5) { \
+      docker push ($AR + '/gateway:' + $Tag) ; \
+      if ($LASTEXITCODE -eq 0) { $pushed = $true ; break } ; \
+      echo ('== push failed (attempt ' + $try + '/5) - transient network/DNS - retrying in 20s') ; \
+      Start-Sleep -Seconds 20 ; \
+    } ; \
+    if (-not $pushed) { echo 'ERROR: docker push kept failing - the Docker VM cannot reach the registry. Fix: wsl --shutdown, reopen Docker Desktop, wait for the green engine, then re-run: just up' ; exit 1 } ; \
     echo ('== build + push usage-consumer:' + $Tag) ; \
     docker build -f Dockerfile.usage-consumer -t ($AR + '/usage-consumer:' + $Tag) . ; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } ; \
-    docker push ($AR + '/usage-consumer:' + $Tag) ; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } ; \
+    $pushed = $false ; \
+    foreach ($try in 1..5) { \
+      docker push ($AR + '/usage-consumer:' + $Tag) ; \
+      if ($LASTEXITCODE -eq 0) { $pushed = $true ; break } ; \
+      echo ('== push failed (attempt ' + $try + '/5) - transient network/DNS - retrying in 20s') ; \
+      Start-Sleep -Seconds 20 ; \
+    } ; \
+    if (-not $pushed) { echo 'ERROR: docker push kept failing - the Docker VM cannot reach the registry. Fix: wsl --shutdown, reopen Docker Desktop, wait for the green engine, then re-run: just up' ; exit 1 } ; \
     echo '== namespaces' ; \
     foreach ($ns in 'inference-guard','kafka','monitoring') { kubectl create namespace $ns --dry-run=client -o yaml | kubectl apply -f - > $null ; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } } ; \
     echo '== gateway api-keys secret' ; \
@@ -216,7 +253,10 @@ up:
     kubectl -n inference-guard get pods ; \
     echo 'GKE stack is up. Next: just gateway-smoke'
 
-# end-to-end proof: health, 401 without key, streamed 200 with tenant attribution
+# end-to-end proof: health, 401 without key, model discovery, streamed 200 with tenant attribution.
+# Windows note: the JSON body is written to a temp file and sent with
+# curl --data-binary @file, because PowerShell mangles inline quotes passed
+# to native executables (that is what produced vLLM "json_invalid" 400s).
 [unix]
 gateway-smoke:
     @GP=$(kubectl -n inference-guard get svc gateway -o jsonpath='{.spec.ports[0].port}') || { echo "ERROR: cannot read gateway service - run: just up" ; exit 1 ; } ; P=18080 ; \
@@ -225,11 +265,15 @@ gateway-smoke:
     echo "Health: $(curl -s -m 5 http://localhost:$P/healthz)" ; \
     CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://localhost:$P/v1/chat/completions) ; \
     echo "No-key request -> $CODE (expect 401)" ; \
+    MODEL=$(curl -s -m 5 http://localhost:$P/v1/models -H "Authorization: Bearer dev-key-a" | sed -E 's/.*"id":"([^"]+)".*/\1/' | head -1) ; \
+    if [ -z "$MODEL" ]; then echo "ERROR: no model served - check the vllm pod" ; kill $PF 2>/dev/null ; exit 1 ; fi ; \
+    echo "== served model: $MODEL" ; \
     echo "== streaming one chat completion (tenant-a)" ; \
-    curl -s -N -m 60 http://localhost:$P/v1/chat/completions -H "Authorization: Bearer dev-key-a" -H "Content-Type: application/json" -d '{"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"Say OK"}],"max_tokens":5}' > /tmp/ig-smoke.sse ; \
+    BODY=$(printf '{"model":"%s","messages":[{"role":"user","content":"Say OK"}],"max_tokens":5,"stream":true}' "$MODEL") ; \
+    curl -s -N -m 60 http://localhost:$P/v1/chat/completions -H "Authorization: Bearer dev-key-a" -H "Content-Type: application/json" -d "$BODY" > /tmp/ig-smoke.sse ; \
     grep -q "data:" /tmp/ig-smoke.sse && echo "stream OK (SSE chunks received)" || { echo "STREAM FAILED" ; cat /tmp/ig-smoke.sse ; kill $PF 2>/dev/null ; exit 1 ; } ; \
     echo "== gateway metrics" ; \
-    curl -s -m 5 http://localhost:$P/metrics | grep -E "^gateway_(requests_total|requests_in_flight|auth_rejections_total)" || true ; \
+    curl -s -m 5 http://localhost:$P/metrics | grep -E "^gateway_(requests_total|requests_in_flight|auth_rejections_total|time_to_first_token_seconds_count)" || true ; \
     kill $PF 2>/dev/null || true
 
 [windows]
@@ -245,18 +289,123 @@ gateway-smoke:
     echo ('Health: ' + (Invoke-WebRequest -Uri ('http://localhost:' + $P + '/healthz') -UseBasicParsing).Content) ; \
     $Code = (curl.exe -s -o NUL -w '%{http_code}' -m 5 ('http://localhost:' + $P + '/v1/chat/completions')) ; \
     echo ('No-key request -> ' + $Code + ' (expect 401)') ; \
+    $Models = (Invoke-WebRequest -Uri ('http://localhost:' + $P + '/v1/models') -Headers @{ Authorization = 'Bearer dev-key-a' } -UseBasicParsing).Content ; \
+    $Model = (($Models | ConvertFrom-Json).data | Select-Object -First 1).id ; \
+    if (-not $Model) { Stop-Job $job -ErrorAction SilentlyContinue ; Remove-Job $job -Force -ErrorAction SilentlyContinue ; echo 'ERROR: no model served - check the vllm pod' ; exit 1 } ; \
+    echo ('== served model: ' + $Model) ; \
     echo '== streaming one chat completion (tenant-a)' ; \
-    $Body = '{"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"Say OK"}],"max_tokens":5}' ; \
+    $BodyFile = Join-Path $env:TEMP 'ig-smoke-body.json' ; \
+    $Body = '{"model":"' + $Model + '","messages":[{"role":"user","content":"Say OK"}],"max_tokens":5,"stream":true}' ; \
+    Set-Content -Path $BodyFile -Value $Body -Encoding ascii ; \
     $Out = Join-Path $env:TEMP 'ig-smoke.sse' ; \
-    curl.exe -s -N -m 60 ('http://localhost:' + $P + '/v1/chat/completions') -H 'Authorization: Bearer dev-key-a' -H 'Content-Type: application/json' -d $Body > $Out ; \
+    curl.exe -s -N -m 60 ('http://localhost:' + $P + '/v1/chat/completions') -H 'Authorization: Bearer dev-key-a' -H 'Content-Type: application/json' --data-binary ('@' + $BodyFile) > $Out ; \
     if (-not (Select-String -Path $Out -Pattern 'data:' -Quiet)) { Get-Content $Out ; echo 'STREAM FAILED' ; Stop-Job $job -ErrorAction SilentlyContinue ; Remove-Job $job -Force -ErrorAction SilentlyContinue ; exit 1 } ; \
     echo 'stream OK (SSE chunks received)' ; \
     echo '== gateway metrics' ; \
-    (curl.exe -s -m 5 ('http://localhost:' + $P + '/metrics')) | Select-String -Pattern '^gateway_(requests_total|requests_in_flight|auth_rejections_total)' | ForEach-Object { echo $_ } ; \
+    (curl.exe -s -m 5 ('http://localhost:' + $P + '/metrics')) | Select-String -Pattern '^gateway_(requests_total|requests_in_flight|auth_rejections_total|time_to_first_token_seconds_count)' | ForEach-Object { echo $_ } ; \
     Stop-Job $job -ErrorAction SilentlyContinue ; \
     Remove-Job $job -Force -ErrorAction SilentlyContinue
 
 alias smoke := gateway-smoke
+
+# sustained traffic so Grafana shows something: Prometheus scrapes every 30s,
+# so a single request barely registers - this sends alternating tenant-a /
+# tenant-b streaming requests (default 60, ~1s apart). Run it in one terminal
+# and watch the dashboard in another (just grafana).
+[unix]
+gateway-load iterations='60':
+    @GP=$(kubectl -n inference-guard get svc gateway -o jsonpath='{.spec.ports[0].port}') || { echo "ERROR: cannot read gateway service - run: just up" ; exit 1 ; } ; P=18080 ; \
+    kubectl -n inference-guard port-forward svc/gateway "$P:$GP" >/dev/null 2>&1 & PF=$! ; sleep 3 ; \
+    if ! curl -s -m 3 http://localhost:$P/healthz >/dev/null ; then echo "ERROR: gateway not reachable - run: just up" ; kill $PF 2>/dev/null ; exit 1 ; fi ; \
+    MODEL=$(curl -s -m 5 http://localhost:$P/v1/models -H "Authorization: Bearer dev-key-a" | sed -E 's/.*"id":"([^"]+)".*/\1/' | head -1) ; \
+    if [ -z "$MODEL" ]; then echo "ERROR: no model served - check the vllm pod" ; kill $PF 2>/dev/null ; exit 1 ; fi ; \
+    BODY=$(printf '{"model":"%s","messages":[{"role":"user","content":"Say OK"}],"max_tokens":5,"stream":true}' "$MODEL") ; \
+    echo "== sending {{iterations}} streaming requests, alternating tenant-a/tenant-b - keep this running while you watch Grafana" ; \
+    OK=0 ; for i in $(seq 1 {{iterations}}) ; do \
+      if [ $((i % 2)) -eq 0 ] ; then KEY=dev-key-a ; else KEY=dev-key-b ; fi ; \
+      CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 60 http://localhost:$P/v1/chat/completions -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d "$BODY") ; \
+      if [ "$CODE" = "200" ] ; then OK=$((OK+1)) ; fi ; \
+      echo "  [$i/{{iterations}}] $KEY -> $CODE" ; sleep 1 ; \
+    done ; \
+    echo "== done: $OK/{{iterations}} requests returned 200 - give Prometheus 1-2 min of scrapes, then check Grafana" ; \
+    kill $PF 2>/dev/null || true
+
+[windows]
+gateway-load iterations='60':
+    @$GP = (kubectl -n inference-guard get svc gateway -o jsonpath='{.spec.ports[0].port}') ; if ($LASTEXITCODE -ne 0) { echo 'ERROR: cannot read gateway service - run: just up' ; exit 1 } ; \
+    $P = '18080' ; \
+    $job = Start-Job -ArgumentList $GP -ScriptBlock { param($gp) kubectl -n inference-guard port-forward svc/gateway ('18080:' + $gp) } ; \
+    Start-Sleep -Seconds 3 ; \
+    $up = $false ; \
+    foreach ($i in 1..20) { try { Invoke-WebRequest -Uri ('http://localhost:' + $P + '/healthz') -TimeoutSec 2 -UseBasicParsing > $null ; $up = $true ; break } catch { Start-Sleep -Milliseconds 500 } } ; \
+    if (-not $up) { Stop-Job $job -ErrorAction SilentlyContinue ; Remove-Job $job -Force -ErrorAction SilentlyContinue ; echo 'ERROR: gateway not reachable - run: just up' ; exit 1 } ; \
+    $Models = (Invoke-WebRequest -Uri ('http://localhost:' + $P + '/v1/models') -Headers @{ Authorization = 'Bearer dev-key-a' } -UseBasicParsing).Content ; \
+    $Model = (($Models | ConvertFrom-Json).data | Select-Object -First 1).id ; \
+    if (-not $Model) { echo 'ERROR: no model served - check the vllm pod' ; Stop-Job $job -ErrorAction SilentlyContinue ; Remove-Job $job -Force -ErrorAction SilentlyContinue ; exit 1 } ; \
+    $BodyFile = Join-Path $env:TEMP 'ig-load-body.json' ; \
+    Set-Content -Path $BodyFile -Value ('{"model":"' + $Model + '","messages":[{"role":"user","content":"Say OK"}],"max_tokens":5,"stream":true}') -Encoding ascii ; \
+    echo ('== sending {{iterations}} streaming requests, alternating tenant-a/tenant-b - keep this running while you watch Grafana') ; \
+    $ok = 0 ; \
+    foreach ($i in 1..{{iterations}}) { \
+      if (($i % 2) -eq 0) { $Key = 'dev-key-a' } else { $Key = 'dev-key-b' } ; \
+      $Code = (curl.exe -s -o NUL -w '%{http_code}' -m 60 ('http://localhost:' + $P + '/v1/chat/completions') -H ('Authorization: Bearer ' + $Key) -H 'Content-Type: application/json' --data-binary ('@' + $BodyFile)) ; \
+      if ($Code -eq '200') { $ok = $ok + 1 } ; \
+      echo ('  [' + $i + '/{{iterations}}] ' + $Key + ' -> ' + $Code) ; \
+      Start-Sleep -Seconds 1 ; \
+    } ; \
+    echo ('== done: ' + $ok + '/{{iterations}} requests returned 200 - give Prometheus 1-2 min of scrapes, then check Grafana') ; \
+    Stop-Job $job -ErrorAction SilentlyContinue ; \
+    Remove-Job $job -Force -ErrorAction SilentlyContinue
+
+# go vet + build + tests (race detector on unix; on Windows -race needs cgo,
+# so it runs when gcc is on PATH and falls back to plain `go test` without it)
+[unix]
+check:
+    @go vet ./... && go build ./... && go test -race ./...
+
+[windows]
+check:
+    @go vet ./... ; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } ; \
+    go build ./... ; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } ; \
+    if ((Get-Command gcc -ErrorAction SilentlyContinue) -and ($env:CGO_ENABLED -ne '0')) { go test -race ./... } else { echo '== gcc not found: -race needs cgo on Windows - running plain go test (to enable: winget install -e --id BrechtSanders.WinLibs.POSIX.UCRT, then restart the terminal)' ; go test ./... } ; \
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# measure the deployed stack's sustainable capacity (ramps offered load)
+[unix]
+bench-calibrate:
+    @kubectl -n inference-guard port-forward deploy/gateway 18081:8080 >/dev/null 2>&1 & PF=$! ; sleep 3 ; \
+    if ! curl -s -m 3 http://localhost:18081/healthz >/dev/null ; then echo "ERROR: gateway not reachable - run: just up" ; kill $PF 2>/dev/null ; exit 1 ; fi ; \
+    : "${BENCH_TENANT_A_KEY:=dev-key-a}" ; export BENCH_TENANT_A_KEY ; \
+    : "${BENCH_TENANT_B_KEY:=dev-key-b}" ; export BENCH_TENANT_B_KEY ; \
+    go run ./cmd/bench -scenario {{calibration_scenario}} -target http://127.0.0.1:18081 -calibrate ; RC=$? ; \
+    kill $PF 2>/dev/null ; exit $RC
+
+[windows]
+bench-calibrate:
+    @echo '== starting gateway port-forward (18081)' ; \
+    $job = Start-Job -ScriptBlock { kubectl -n inference-guard port-forward deploy/gateway 18081:8080 } ; \
+    $ok = $false ; \
+    foreach ($i in 1..30) { try { Invoke-WebRequest -Uri 'http://localhost:18081/healthz' -TimeoutSec 2 -UseBasicParsing > $null ; $ok = $true ; break } catch { Start-Sleep -Milliseconds 500 } } ; \
+    if (-not $ok) { Stop-Job $job -ErrorAction SilentlyContinue ; Remove-Job $job -Force -ErrorAction SilentlyContinue ; echo 'ERROR: gateway not reachable - run: just up' ; exit 1 } ; \
+    if (-not $env:BENCH_TENANT_A_KEY) { $env:BENCH_TENANT_A_KEY = 'dev-key-a' } ; \
+    if (-not $env:BENCH_TENANT_B_KEY) { $env:BENCH_TENANT_B_KEY = 'dev-key-b' } ; \
+    go run ./cmd/bench -scenario {{calibration_scenario}} -target http://127.0.0.1:18081 -calibrate ; $rc = $LASTEXITCODE ; \
+    Stop-Job $job -ErrorAction SilentlyContinue ; Remove-Job $job -Force -ErrorAction SilentlyContinue ; \
+    if ($rc -ne 0) { exit $rc }
+
+# four control modes (none / static / ratelimit / adaptive) on one calibrated
+# 2x-overload workload; manages its own port-forwards, restores the gateway env
+[unix]
+bench-matrix:
+    @: "${BENCH_TENANT_A_KEY:=dev-key-a}" ; export BENCH_TENANT_A_KEY ; \
+    : "${BENCH_TENANT_B_KEY:=dev-key-b}" ; export BENCH_TENANT_B_KEY ; \
+    go run ./cmd/bench -scenario {{calibration_scenario}} -matrix
+
+[windows]
+bench-matrix:
+    @if (-not $env:BENCH_TENANT_A_KEY) { $env:BENCH_TENANT_A_KEY = 'dev-key-a' } ; \
+    if (-not $env:BENCH_TENANT_B_KEY) { $env:BENCH_TENANT_B_KEY = 'dev-key-b' } ; \
+    go run ./cmd/bench -scenario {{calibration_scenario}} -matrix
 
 # dashboards: prints the password, forwards localhost:3000, blocks until Ctrl-C
 [unix]
@@ -278,7 +427,8 @@ grafana:
     echo 'Open http://localhost:3000  (Ctrl-C stops the forward)' ; \
     kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana ('3000:' + $GPORT)
 
-# destroy everything; purges AR images first so destroy stays clean
+# destroy everything; purges AR images first so destroy stays clean, then
+# prints a cost check (disks / repositories / clusters should all be empty)
 [unix]
 down:
     @echo "== artifact registry purge" ; \
