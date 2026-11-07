@@ -32,8 +32,14 @@ spec:
         - name: vllm
           image: vllm/vllm-openai:v0.33.0
           args:
+            # The model is a swappable load source — the infra (gateway,
+            # admission control, metrics) never sees which model runs. The
+            # served id is the REAL model id; clients (bench harness, smoke
+            # test) discover it via GET /v1/models so nothing anywhere
+            # hardcodes a model name. Swap the model here for heavier
+            # benchmarks (e.g. Qwen/Qwen3-8B, ~16 GB bf16, fits the L4's
+            # 24 GB) — nothing else changes.
             - --model=Qwen/Qwen2.5-0.5B-Instruct
-            - --served-model-name=Qwen/Qwen3-8B
             - --max-model-len=8192
             - --gpu-memory-utilization=0.90
             - --disable-log-requests
