@@ -394,18 +394,32 @@ bench-calibrate:
     if ($rc -ne 0) { exit $rc }
 
 # four control modes (none / static / ratelimit / adaptive) on one calibrated
-# 2x-overload workload; manages its own port-forwards, restores the gateway env
+# 2x-overload workload; restores the gateway env. The bench tool opens its own
+# 18081 tunnel for the modes phase, but model discovery + the calibration phase
+# talk to -target, so the recipe opens the same 18081 tunnel first (mirrors
+# bench-calibrate) - without it bench defaults to 127.0.0.1:8080 and fails.
 [unix]
 bench-matrix:
-    @: "${BENCH_TENANT_A_KEY:=dev-key-a}" ; export BENCH_TENANT_A_KEY ; \
+    @kubectl -n inference-guard port-forward deploy/gateway 18081:8080 >/dev/null 2>&1 & PF=$! ; sleep 3 ; \
+    if ! curl -s -m 3 http://localhost:18081/healthz >/dev/null ; then echo "ERROR: gateway not reachable - run: just up" ; kill $PF 2>/dev/null ; exit 1 ; fi ; \
+    : "${BENCH_TENANT_A_KEY:=dev-key-a}" ; export BENCH_TENANT_A_KEY ; \
     : "${BENCH_TENANT_B_KEY:=dev-key-b}" ; export BENCH_TENANT_B_KEY ; \
-    go run ./cmd/bench -scenario {{calibration_scenario}} -matrix
+    go run ./cmd/bench -scenario {{calibration_scenario}} -target http://127.0.0.1:18081 -matrix ; RC=$? ; \
+    kill $PF 2>/dev/null ; exit $RC
 
 [windows]
 bench-matrix:
-    @if (-not $env:BENCH_TENANT_A_KEY) { $env:BENCH_TENANT_A_KEY = 'dev-key-a' } ; \
+    @echo '== starting gateway port-forward (18081, for model discovery + calibration)' ; \
+    $job = Start-Job -ScriptBlock { kubectl -n inference-guard port-forward deploy/gateway 18081:8080 } ; \
+    $ok = $false ; \
+    foreach ($i in 1..30) { try { Invoke-WebRequest -Uri 'http://localhost:18081/healthz' -TimeoutSec 2 -UseBasicParsing > $null ; $ok = $true ; break } catch { Start-Sleep -Milliseconds 500 } } ; \
+    if (-not $ok) { Stop-Job $job -ErrorAction SilentlyContinue ; Remove-Job $job -Force -ErrorAction SilentlyContinue ; echo 'ERROR: gateway not reachable - run: just up' ; exit 1 } ; \
+    if (-not $env:BENCH_TENANT_A_KEY) { $env:BENCH_TENANT_A_KEY = 'dev-key-a' } ; \
     if (-not $env:BENCH_TENANT_B_KEY) { $env:BENCH_TENANT_B_KEY = 'dev-key-b' } ; \
-    go run ./cmd/bench -scenario {{calibration_scenario}} -matrix
+    echo '== running matrix (calibration first, then 4 modes - this takes a while)' ; \
+    go run ./cmd/bench -scenario {{calibration_scenario}} -target http://127.0.0.1:18081 -matrix ; $rc = $LASTEXITCODE ; \
+    Stop-Job $job -ErrorAction SilentlyContinue ; Remove-Job $job -Force -ErrorAction SilentlyContinue ; \
+    if ($rc -ne 0) { exit $rc }
 
 # dashboards: prints the password, forwards localhost:3000, blocks until Ctrl-C
 [unix]
